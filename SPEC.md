@@ -17,6 +17,8 @@ All multi-byte integers are **unsigned, big-endian** (network byte order). All s
   request into its response. The client MUST check that the ID matches the oldest request
   still waiting for a response. If it does not match, that is a protocol error and the client
   closes the connection.
+- If the connection closes while a request is still waiting for its response, that request has
+  failed. The client reports an error and does not retry automatically.
 
 ## 2. Frame header (8 bytes, fixed)
 
@@ -104,6 +106,7 @@ by Status, Header count and Headers. This avoids storing the same length twice.
 
 If a REQUEST has CLOSE set, the server sends its response with CLOSE set and then closes the
 connection. If a RESPONSE has CLOSE set, the client MUST NOT send more requests on that connection.
+It closes its own side, and reports any requests it had not yet sent as failed.
 *Rationale:* this replaces HTTP/1.1's `Connection: close` header with a single bit. Ignoring
 reserved bits lets future versions give them meanings without breaking old receivers.
 
@@ -143,7 +146,9 @@ Each header entry looks like this:
 
 IDs 11–255 are reserved. A receiver that sees one MUST still read the 2-byte Value length and
 skip the value, then ignore that entry. This lets the table grow later without breaking old
-receivers. Dates use the HTTP IMF-fixdate format.
+receivers. Dates use the HTTP IMF-fixdate format. Header order does not matter, and each name
+SHOULD appear at most once. If `content-length` is present, it MUST equal the body length;
+a mismatch is a protocol error.
 *Rationale:* a common header costs 1 byte for its name instead of 5–15 bytes of text. Values
 stay as text so they are easy to read in a hexdump and work the same way as HTTP's.
 Real HPACK adds a dynamic table and Huffman coding, which we leave out to keep it simple.
@@ -164,8 +169,15 @@ contains a NUL byte or is not valid UTF-8; a literal Name length is 0; Request I
 The frame header is still intact in all of these cases, so the server replies 400 with the same
 Request ID and **keeps the connection open**.
 
-**Oversized:** if a REQUEST's `Length` is over 65,536, the server replies 400 with CLOSE set
-and closes the connection without reading the payload.
+**Oversized:** clients MUST NOT send a REQUEST payload larger than 65,536 bytes. If a REQUEST's
+`Length` is over 65,536 anyway, the server replies 400 with CLOSE set and closes the connection
+without reading the payload.
+
+**Malformed responses:** the client applies the same structural rules to RESPONSE payloads
+(the payload ends before a field is complete, or a literal Name length is 0). A violation is a
+protocol error, and the client closes the connection.
+
+**Status classes:** 2xx means success. Clients treat every code outside 200–399 as a failure.
 
 **Truncated:** if the connection reaches EOF in the middle of a frame, the receiver closes the
 connection without replying.
