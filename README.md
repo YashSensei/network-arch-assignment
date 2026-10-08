@@ -40,6 +40,35 @@ This is a custom binary protocol. A browser or ordinary HTTP curl cannot speak i
 
 ## Verify
 
+### One-minute live demo
+
+Start the server with `./bserve ./www 9000` (Windows: `.\bserve.cmd .\www 9000`). In a second terminal, run:
+
+```sh
+python tests/demo_server.py
+```
+
+The demo sends six requests together, with an unknown frame inserted between them, then sends a seventh request on the same socket. Expected output:
+
+```text
+Sending six pipelined requests plus an unknown frame in one batch.
+ID  STATUS  PATH
+1   200     /index.html
+2   200     /hello.txt
+3   404     /missing-demo-file
+4   400     relative-path
+5   403     /../outside-demo-file
+6   200     /hello.txt
+7   200     /hello.txt (follow-up with CLOSE)
+PASS: one TCP connection, seven ordered responses.
+PASS: unknown type skipped; 400/403/404 did not break the connection.
+PASS: response lengths verified; CLOSE acknowledged, then EOF.
+```
+
+This demonstrates pipelining, the required extension rule, persistent error recovery, indexed and literal request headers, and explicit connection closure. The unknown frame even contains a fake request and has CLOSE set: neither affects the next exchange. A failed check exits nonzero. Use `--port PORT` for a different port, or `--self-test` to start and stop a temporary server automatically. The demo expects this repository's `www` sample root.
+
+### Full checks
+
 Tests need **Python 3.9+** and the JDK (`java` and `javac`); all test dependencies are in the standard library.
 
 ```sh

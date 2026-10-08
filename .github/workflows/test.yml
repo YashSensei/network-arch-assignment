@@ -16,4 +16,5 @@ jobs:
         with:
           python-version: '3.12'
       - run: python tests/test_server.py
+      - run: python tests/demo_server.py --self-test
       - run: python tests/capture_exchange.py
