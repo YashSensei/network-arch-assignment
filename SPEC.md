@@ -1,6 +1,6 @@
 # BinHTTP/1 - Protocol specification
 
-Revision 1.1 | Track 1: server | Page 1 of 2
+Revision 1.2 | Track 1: server | Page 1 of 2
 
 MUST/MUST NOT are requirements. All integers are unsigned, big-endian. Lengths count bytes, never characters. Text is strict UTF-8 without terminators, except literal header names (ASCII). There is no handshake or magic prefix: the first byte is part of the first frame.
 
@@ -8,7 +8,7 @@ MUST/MUST NOT are requirements. All integers are unsigned, big-endian. Lengths c
 
 Use one TCP connection for multiple exchanges. A request is one REQUEST frame; its response is one RESPONSE frame. Read exactly the 8-byte frame header, then exactly Length payload bytes. TCP reads may return partial frames or multiple frames together. EOF is not a message delimiter.
 
-The server MUST keep the connection open after complete responses unless CLOSE is requested or a fatal error occurs. It handles requests and returns responses in arrival order, including pipelined requests. IDs are 1-65535, copied into responses; clients MUST NOT reuse an outstanding ID. After 65535, reuse 1 once it is free. Clients match each response to the oldest outstanding request. ID mismatch or a malformed response is fatal; close without retrying. Unexpected EOF fails outstanding requests.
+The server MUST keep the connection open after complete responses unless CLOSE is requested or a fatal error occurs. It handles requests and returns responses in arrival order, including pipelined requests. IDs are 1-65535, copied into responses; clients MUST NOT reuse an outstanding ID. After 65535, reuse 1 once it is free. Clients match each response to the oldest outstanding request. ID mismatch or a malformed response is fatal; close without retrying. Unexpected EOF fails outstanding requests. This server admits at most 64 simultaneous connections; excess sockets close before any frame is read, without affecting admitted connections.
 
 ## 2. Fixed frame header
 
@@ -51,7 +51,7 @@ The server acts only on REQUEST; the client acts only on RESPONSE. For EVERY oth
 
 # BinHTTP/1 - Headers and server behaviour
 
-Revision 1.1 | Track 1: server | Page 2 of 2
+Revision 1.2 | Track 1: server | Page 2 of 2
 
 ## 6. Header encoding
 
@@ -76,7 +76,7 @@ When present, content-length MUST be nonempty ASCII digits and equal the actual 
 
 ## 7. Paths, errors and limits
 
-Paths are literal UTF-8 file paths using / separators. They MUST NOT contain NUL, backslash or colon, or start with //. No URL decoding, query parsing or fragment parsing occurs: %, ? and # are literal filename characters where the host filesystem permits them. Append index.html to paths ending in /. Strip the leading / and resolve beneath the canonical document root. Reject a lexically normalized escape with 403, then resolve symlinks and reject any existing target outside the canonical root with 403. Do not serve directories. Missing targets (including broken symlinks) return 404.
+Paths are literal UTF-8 file paths using / separators. They MUST NOT contain NUL, backslash or colon, or start with //. No URL decoding, query parsing or fragment parsing occurs: %, ? and # are literal filename characters where the host filesystem permits them. Append index.html to paths ending in /. Strip the leading /, resolve beneath the canonical root, and normalize . and .. BEFORE any filesystem lookup. Reject an escape with 403. Resolve symlinks on that normalized path and reject existing targets outside the canonical root with 403. Thus /missing/../hello.txt maps to /hello.txt on every OS. Do not serve directories. Missing targets (including broken symlinks) return 404.
 
 | Status | Meaning |
 | --- | --- |

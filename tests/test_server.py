@@ -2,13 +2,14 @@
 
 import contextlib
 import hashlib
+import os
 from pathlib import Path
 import socket
 import struct
 import tempfile
 import unittest
 
-from support import frame, header, request, response, running_server
+from support import frame, header, read_exact, request, response, running_server
 
 
 class ServerTests(unittest.TestCase):
@@ -217,6 +218,135 @@ class ServerTests(unittest.TestCase):
         with self.server.connect(), self.server.connect() as second:
             second.sendall(frame(request(), flags=1))
             self.check_response(second, flags=1)
+
+    def test_path_normalization_is_independent_of_filesystem(self):
+        # Normalize dot segments before following symlinks or querying the OS.
+        # Otherwise these are 200 on Windows and 404 on POSIX.
+        with self.server.connect() as sock:
+            for i, path in enumerate(["/missing/../hello.txt", "/hello.txt/../hello.txt"], 1):
+                sock.sendall(frame(request(path), i))
+                self.check_response(sock, request_id=i, body=b"hello, world\n")
+
+    def test_control_characters_cannot_forge_log_entries(self):
+        # Isolate logs from other tests; read events rather than relying on sleeps.
+        with running_server(self.root) as server, server.connect() as sock:
+            self.assertIn("connected from", server.next_log())
+            sock.sendall(frame(request("/missing\n[bserve] forged\r\x1b[31m")))
+            self.check_response(sock, 404)
+            line = server.next_log()
+            self.assertIn(r"/missing\u000a[bserve] forged\u000d\u001b[31m -> 404", line)
+            self.assertNotIn("\x1b", line)
+            sock.sendall(frame(request(), 2, 1))
+            self.check_response(sock, request_id=2, flags=1)
+
+    def test_connection_capacity_and_recovery(self):
+        # 64 simultaneous connections are the documented admission limit.
+        with running_server(self.root) as server, contextlib.ExitStack() as clients:
+            sockets = []
+            for _ in range(64):
+                sock = clients.enter_context(server.connect())
+                sock.sendall(frame(request()))
+                self.check_response(sock)
+                sockets.append(sock)
+            with server.connect() as overflow:
+                overflow.settimeout(1)
+                self.assertEqual(overflow.recv(1), b"")
+            # The full server still processes requests on all admitted sockets.
+            sockets[0].sendall(frame(request(), 2, 1))
+            self.check_response(sockets[0], request_id=2, flags=1)
+            self.assertEqual(sockets[0].recv(1), b"")
+            # A release is logged only after capacity becomes available.
+            while "slot released" not in server.next_log():
+                pass
+            with server.connect() as replacement:
+                replacement.sendall(frame(request(), 3, 1))
+                self.check_response(replacement, request_id=3, flags=1)
+
+    def test_payload_cuts_at_every_byte_recover(self):
+        payload = request(headers=[header(1, "localhost"), header("x-note", "caf\u00e9")])
+        with self.server.connect() as sock:
+            for end in range(len(payload)):
+                sock.sendall(frame(payload[:end], end + 1))
+                self.check_response(sock, 400, end + 1)
+            sock.sendall(frame(payload, 100, 1))
+            self.check_response(sock, request_id=100, flags=1)
+
+    def test_fragment_cannot_be_mistaken_for_complete_frame(self):
+        wire = frame(request())
+        with self.server.connect() as sock:
+            sock.sendall(wire[:-1])
+            sock.settimeout(0.15)
+            with self.assertRaises(socket.timeout):
+                sock.recv(1)
+            sock.settimeout(10)
+            sock.sendall(wire[-1:] + frame(request(), 2, 1))
+            self.check_response(sock)
+            self.check_response(sock, request_id=2, flags=1)
+
+    def test_client_half_close_still_receives_pipelined_responses(self):
+        with self.server.connect() as sock:
+            sock.sendall(frame(request(), 1) + frame(request("/missing"), 2))
+            sock.shutdown(socket.SHUT_WR)
+            self.check_response(sock, request_id=1)
+            self.check_response(sock, 404, request_id=2)
+            self.assertEqual(sock.recv(1), b"")
+
+    def test_file_shrink_closes_without_inserting_a_second_response(self):
+        path = self.root / "shrinking.bin"
+        try:
+            with path.open("wb") as file:
+                file.truncate(16 * 1024 * 1024)
+            with self.server.connect() as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+                sock.sendall(frame(request("/shrinking.bin")) + frame(request(), 2))
+                length, kind, flags, request_id = struct.unpack("!IBBH", read_exact(sock, 8))
+                self.assertEqual((kind, flags, request_id), (2, 0, 1))
+                # The frame has started and its announced length cannot change.
+                # The receive window prevents the entire 16 MiB file being sent first.
+                with path.open("wb"):
+                    pass
+                partial = bytearray()
+                while chunk := sock.recv(65536):
+                    partial.extend(chunk)
+                self.assertLess(len(partial), length)
+                status, count = struct.unpack_from("!HB", partial)
+                self.assertEqual(status, 200)
+                pos = 3
+                for _ in range(count):
+                    self.assertIn(partial[pos], range(1, 11))
+                    n, = struct.unpack_from("!H", partial, pos + 1)
+                    pos += 3 + n
+                # Original file bytes are all zero. An injected error or second
+                # pipelined response would introduce nonzero bytes into this body.
+                self.assertFalse(any(partial[pos:]))
+            with self.server.connect() as sock:
+                sock.sendall(frame(request(), 3, 1))
+                self.check_response(sock, request_id=3, flags=1)
+        finally:
+            path.unlink(missing_ok=True)
+
+    @unittest.skipIf(os.name == "nt", "requires POSIX file permissions and sparse files")
+    def test_filesystem_errors_return_500_without_losing_connection(self):
+        unreadable = self.root / "unreadable.txt"
+        enormous = self.root / "too-large.bin"
+        unreadable.write_bytes(b"private")
+        # A sparse file exercises the u32 frame limit without writing 4 GiB.
+        with enormous.open("wb") as file:
+            file.truncate(0xFFFFFFFF)
+        unreadable.chmod(0)
+        try:
+            with self.server.connect() as sock:
+                if os.geteuid() != 0:
+                    sock.sendall(frame(request("/unreadable.txt"), 1))
+                    self.check_response(sock, 500, 1)
+                sock.sendall(frame(request("/too-large.bin"), 2))
+                self.check_response(sock, 500, 2)
+                sock.sendall(frame(request(), 3, 1))
+                self.check_response(sock, request_id=3, flags=1)
+        finally:
+            unreadable.chmod(0o600)
+            unreadable.unlink()
+            enormous.unlink()
 
 
 if __name__ == "__main__":

@@ -34,7 +34,7 @@ Or, on any platform:
 java -Dfile.encoding=UTF-8 server/BServe.java ./www 9000
 ```
 
-The root must exist and be a directory. Port `0` chooses an available port and logs it. Stop the server with Ctrl+C. Diagnostics include a connection number and request ID on stderr, so repeated exchanges can be traced to one socket.
+The root must exist and be a directory. Port `0` chooses an available port and logs it. Stop the server with Ctrl+C. Diagnostics include a connection number and request ID on stderr, so repeated exchanges can be traced to one socket. Control characters are escaped and long log entries are truncated. Up to 64 connections can remain open at once; excess connections close before frame processing, and capacity is released when a client disconnects.
 
 This is a custom binary protocol. A browser or ordinary HTTP curl cannot speak it. A partner's client should implement [SPEC.md](SPEC.md); for a complete local exchange, run the capture probe below.
 
@@ -47,7 +47,7 @@ python tests/test_server.py
 python tests/capture_exchange.py
 ```
 
-The suite compiles with Java 17 compatibility and warnings treated as errors. It starts a server on an available port and checks it using independently encoded Python socket frames. It covers seven exchanges on one connection, six pipelined requests, fragmented input, exact binary and empty file bodies, 400/403/404 recovery, extension frames and headers, CLOSE, truncated input, request limits, path containment, and concurrent connections. A 40 MiB file is verified by SHA-256 while the Java server runs with a 32 MiB heap. Symlink tests skip when the OS does not permit creating links.
+The suite compiles with Java 17 compatibility and warnings treated as errors. It starts a server on an available port and checks it using independently encoded Python socket frames. It covers seven exchanges on one connection, six pipelined requests, fragmented input, exact binary and empty file bodies, 400/403/404/500 recovery, extension frames and headers, CLOSE, truncated input, request limits, path containment, and concurrent connections. A 40 MiB file is verified by SHA-256 while the Java server runs with a 32 MiB heap. Audit regressions cover incomplete payloads at every byte boundary, client half-close, file shrinkage mid-response, consistent dot-segment normalization, log injection, and connection saturation/recovery. Symlink tests skip when the OS cannot create links; the permission/sparse-file test runs on POSIX.
 
 The capture probe starts a temporary server against `www`, prints one real exchange and its hexdump, then sends a second request over the same socket to verify persistence. To regenerate the annotated hand-in:
 
@@ -55,7 +55,7 @@ The capture probe starts a temporary server against `www`, prints one real excha
 python tests/capture_exchange.py --write
 ```
 
-GitHub Actions runs the suite on Linux and Windows. Local Windows verification: 15 tests passed, 1 symlink test skipped because this machine does not grant symlink creation.
+GitHub Actions runs the 24-test suite on Linux and Windows. The local Windows run skips the symlink and POSIX-specific filesystem cases; Linux CI exercises them.
 
 ## Changes from the starter
 
@@ -63,6 +63,7 @@ GitHub Actions runs the suite on Linux and Windows. Local Windows verification: 
 - Stream response bodies through an 8 KiB buffer, with the frame length covering headers plus body.
 - Return appropriate file errors before starting a response and close cleanly on a failure during streaming.
 - Define portable path rules, retain traversal checks, and check symlink containment before file type.
+- Normalize dot segments consistently across platforms, escape untrusted log text, and cap concurrent connections without expiring active sockets.
 - Provide Windows launch support, independent server tests, a two-page spec and a reproducible capture.
 
 The server keeps the starter's eight-byte frame layout, static header table and required unknown-type skip rule. Scope stays small: GET files, ordered responses, no multiplexing, TLS, dynamic compression or additional methods. One thread handles each connection. The document root is assumed to be controlled by the operator and stable while serving; this is a course project rather than a hardened public file host.

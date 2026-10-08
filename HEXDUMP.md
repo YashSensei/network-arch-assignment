@@ -11,7 +11,7 @@ Field definitions are in [SPEC.md](SPEC.md).
 ```text
 0000  00 00 00 35 01 00 00 01 01 00 0a 2f 68 65 6c 6c  |...5......./hell|
 0010  6f 2e 74 78 74 03 01 00 0f 6c 6f 63 61 6c 68 6f  |o.txt....localho|
-0020  73 74 3a 35 33 36 39 34 02 00 0c 73 70 65 63 2d  |st:53694...spec-|
+0020  73 74 3a 35 37 39 38 39 02 00 0c 73 70 65 63 2d  |st:57989...spec-|
 0030  70 72 6f 62 65 2f 31 03 00 03 2a 2f 2a           |probe/1...*/*|
 ```
 
@@ -27,7 +27,7 @@ Field definitions are in [SPEC.md](SPEC.md).
 | 0015 | `03` | Header count | 3 |
 | 0016 | `01` | Name ID | 1: host |
 | 0017-0018 | `00 0f` | host value length | 15 |
-| 0019-0027 | `6c 6f 63 61 6c 68 6f 73 74 3a 35 33 36 39 34` | host value | `localhost:53694` |
+| 0019-0027 | `6c 6f 63 61 6c 68 6f 73 74 3a 35 37 39 38 39` | host value | `localhost:57989` |
 | 0028 | `02` | Name ID | 2: user-agent |
 | 0029-002a | `00 0c` | user-agent value length | 12 |
 | 002b-0036 | `73 70 65 63 2d 70 72 6f 62 65 2f 31` | user-agent value | `spec-probe/1` |
@@ -40,8 +40,8 @@ Field definitions are in [SPEC.md](SPEC.md).
 ```text
 0000  00 00 00 91 02 00 00 01 00 c8 07 04 00 0a 62 73  |..............bs|
 0010  65 72 76 65 2f 31 2e 31 05 00 1d 54 68 75 2c 20  |erve/1.1...Thu, |
-0020  30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 32  |08 Oct 2026 13:2|
-0030  30 3a 34 32 20 47 4d 54 06 00 0a 74 65 78 74 2f  |0:42 GMT...text/|
+0020  30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 33  |08 Oct 2026 13:3|
+0030  33 3a 34 37 20 47 4d 54 06 00 0a 74 65 78 74 2f  |3:47 GMT...text/|
 0040  70 6c 61 69 6e 07 00 02 31 34 08 00 1d 54 68 75  |plain...14...Thu|
 0050  2c 20 30 38 20 4f 63 74 20 32 30 32 36 20 31 33  |, 08 Oct 2026 13|
 0060  3a 31 31 3a 33 39 20 47 4d 54 09 00 11 57 2f 22  |:11:39 GMT...W/"|
@@ -63,7 +63,7 @@ Field definitions are in [SPEC.md](SPEC.md).
 | 000e-0017 | `62 73 65 72 76 65 2f 31 2e 31` | server value | `bserve/1.1` |
 | 0018 | `05` | Name ID | 5: date |
 | 0019-001a | `00 1d` | date value length | 29 |
-| 001b-0037 | `54 68 75 2c 20 30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 32 30 3a 34 32 20 47 4d 54` | date value | `Thu, 08 Oct 2026 13:20:42 GMT` |
+| 001b-0037 | `54 68 75 2c 20 30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 33 33 3a 34 37 20 47 4d 54` | date value | `Thu, 08 Oct 2026 13:33:47 GMT` |
 | 0038 | `06` | Name ID | 6: content-type |
 | 0039-003a | `00 0a` | content-type value length | 10 |
 | 003b-0044 | `74 65 78 74 2f 70 6c 61 69 6e` | content-type value | `text/plain` |

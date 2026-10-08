@@ -9,6 +9,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -33,6 +34,7 @@ public class BServe {
     static final long MAX_REQUEST_PAYLOAD = 65_536;
 
     static final long MAX_FRAME_PAYLOAD = 0xFFFFFFFFL;
+    static final int MAX_CONNECTIONS = 64;
 
     // §6 static header table. The array index is the Name ID (0 means "literal name").
     static final String[] HEADER_NAMES = {
@@ -85,12 +87,33 @@ public class BServe {
 
         try (ServerSocket server = new ServerSocket(port)) {
             log(0, "serving " + root + " on port " + server.getLocalPort());
+            Semaphore slots = new Semaphore(MAX_CONNECTIONS);
             // One thread per connection. Inside a connection, requests are
             // handled strictly one after another (§1).
             while (true) {
                 Socket sock = server.accept();
                 int conn = connCounter.incrementAndGet();
-                new Thread(() -> handleConnection(sock, conn), "bserve-" + conn).start();
+                // Idle sockets must not create an unbounded number of native threads.
+                // Admission never interrupts a connection that is already being served.
+                if (!slots.tryAcquire()) {
+                    sock.close();
+                    log(conn, "connection capacity reached, closed before reading frames");
+                    continue;
+                }
+                try {
+                    new Thread(() -> {
+                        try {
+                            handleConnection(sock, conn);
+                        } finally {
+                            slots.release();
+                            log(conn, "connection slot released");
+                        }
+                    }, "bserve-" + conn).start();
+                } catch (RuntimeException | Error e) {
+                    slots.release();
+                    sock.close();
+                    throw e;
+                }
             }
         } catch (IOException e) {
             System.err.println("bserve: " + e.getMessage());
@@ -265,14 +288,15 @@ public class BServe {
         // "." and "..", so "/../secret" turns into a path outside root.
         Path target;
         try {
-            target = root.resolve(p.substring(1));
+            // Normalize before filesystem lookup, consistently on Windows and POSIX.
+            target = root.resolve(p.substring(1)).normalize();
         } catch (InvalidPathException e) {
             respondError(out, conn, id, flags, 404, path, "not found");
             return;
         }
 
         // Check 1: after normalizing, is the path still inside root?
-        if (!target.normalize().startsWith(root)) {
+        if (!target.startsWith(root)) {
             respondError(out, conn, id, flags, 403, path, "forbidden: path escapes document root");
             return;
         }
@@ -426,6 +450,20 @@ public class BServe {
     }
 
     static void log(int conn, String msg) {
-        System.err.println("[bserve] " + (conn == 0 ? "" : "conn#" + conn + " ") + msg);
+        // Paths are untrusted UTF-8. Keep each event on one line and prevent
+        // terminal escape sequences, bidi controls and arbitrarily long log entries.
+        StringBuilder safe = new StringBuilder();
+        int end = Math.min(msg.length(), 1024);
+        for (int i = 0; i < end; i++) {
+            char c = msg.charAt(i);
+            if (Character.isISOControl(c) || Character.getType(c) == Character.FORMAT
+                    || c == '\u2028' || c == '\u2029') {
+                safe.append(String.format("\\u%04x", (int) c));
+            } else {
+                safe.append(c);
+            }
+        }
+        if (end < msg.length()) safe.append("... (truncated)");
+        System.err.println("[bserve] " + (conn == 0 ? "" : "conn#" + conn + " ") + safe);
     }
 }

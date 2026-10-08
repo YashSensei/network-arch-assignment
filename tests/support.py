@@ -78,11 +78,16 @@ def response(sock):
 
 
 class Server:
-    def __init__(self, port, process, logs):
-        self.port, self.process, self.logs = port, process, logs
+    def __init__(self, port, process, logs, events):
+        self.port, self.process, self.logs, self.events = port, process, logs, events
 
     def connect(self):
         return socket.create_connection(("127.0.0.1", self.port), timeout=10)
+
+    def next_log(self):
+        line = self.events.get(timeout=10)
+        assert line is not None, "server exited before writing its next log entry"
+        return line.rstrip("\r\n")
 
 
 @contextlib.contextmanager
@@ -111,7 +116,7 @@ def running_server(root):
             match = re.search(r" on port (\d+)$", line or "")
             if not match:
                 raise AssertionError(f"server did not start: {line}")
-            yield Server(int(match[1]), process, logs)
+            yield Server(int(match[1]), process, logs, lines)
         finally:
             process.terminate()
             try:
