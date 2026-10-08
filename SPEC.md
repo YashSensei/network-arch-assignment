@@ -1,198 +1,97 @@
-# BinHTTP/1 — A Minimal Binary HTTP-like Protocol
+# BinHTTP/1 - Protocol specification
 
-Status: draft 1. The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
-All multi-byte integers are **unsigned, big-endian** (network byte order). All strings are
-**UTF-8 bytes with no terminator**; their length always comes from a prefix field.
+Revision 1.1 | Track 1: server | Page 1 of 2
 
-## 1. Connection model
+MUST/MUST NOT are requirements. All integers are unsigned, big-endian. Lengths count bytes, never characters. Text is strict UTF-8 without terminators, except literal header names (ASCII). There is no handshake or magic prefix: the first byte is part of the first frame.
 
-- Transport is a single TCP connection. The client sends requests and the server sends responses.
-  Either side MAY close the connection after any complete frame.
-- Each request is exactly one `REQUEST` frame, and each response is exactly one `RESPONSE` frame.
-  Bodies are never split across frames.
-- The server processes requests **one at a time, in arrival order**, and sends each response in
-  that same order. A client MAY send the next request before the previous response arrives
-  (pipelining), but responses never arrive out of order.
-- The **Request ID** pairs a request with its response. The server MUST copy the ID of each
-  request into its response. The client MUST check that the ID matches the oldest request
-  still waiting for a response. If it does not match, that is a protocol error and the client
-  closes the connection.
-- If the connection closes while a request is still waiting for its response, that request has
-  failed. The client reports an error and does not retry automatically.
+## 1. Connection and ordering
 
-## 2. Frame header (8 bytes, fixed)
+Use one TCP connection for multiple exchanges. A request is one REQUEST frame; its response is one RESPONSE frame. Read exactly the 8-byte frame header, then exactly Length payload bytes. TCP reads may return partial frames or multiple frames together. EOF is not a message delimiter.
 
-Every frame starts with this header, followed by exactly `Length` bytes of payload.
+The server MUST keep the connection open after complete responses unless CLOSE is requested or a fatal error occurs. It handles requests and returns responses in arrival order, including pipelined requests. IDs are 1-65535, copied into responses; clients MUST NOT reuse an outstanding ID. After 65535, reuse 1 once it is free. Clients match each response to the oldest outstanding request. ID mismatch or a malformed response is fatal; close without retrying. Unexpected EOF fails outstanding requests.
 
-| Offset | Size | Field      | Meaning                                                    |
-|-------:|-----:|------------|------------------------------------------------------------|
-| 0      | 4    | Length     | Payload length in bytes, not counting this 8-byte header   |
-| 4      | 1    | Type       | Frame type (§3)                                            |
-| 5      | 1    | Flags      | Bit flags (§4)                                             |
-| 6      | 2    | Request ID | Pairs a request with its response (§1); 0 is reserved      |
+## 2. Fixed frame header
 
-**Why these widths:**
-- **Length = 32 bits.** We never split a body across frames, so one frame has to carry a whole
-  file. 24 bits would limit files to 16 MiB; 32 bits allows up to 4 GiB. One extra byte per
-  frame costs almost nothing.
-- **Type = 8 bits.** We define 2 types, which leaves 254 for extensions. Because of the skip
-  rule (§5), new types can be added without breaking old receivers.
-- **Flags = 8 bits.** We use 1 bit and keep 7 for later. A byte is the smallest unit we can
-  address, so it costs the same as 1 bit.
-- **Request ID = 16 bits.** IDs only have to tell apart the requests that are in flight at the
-  same moment on one ordered connection, and 65,535 is far more than that. The ID wraps from
-  65535 back to 1, so it never runs out.
-- Total header size is 8 bytes. Every field sits on its natural alignment boundary, so each one
-  is a single read.
+| Offset | Bytes | Field | Meaning |
+| --- | --- | --- | --- |
+| 0 | 4 | Length | Payload byte count; excludes this header |
+| 4 | 1 | Type | 0x01 REQUEST, 0x02 RESPONSE |
+| 5 | 1 | Flags | Bit 0 is CLOSE; other bits reserved |
+| 6 | 2 | Request ID | Echoed in the response; 0 reserved |
 
-**Comparison with HTTP/2's header (24/8/8/31 + 1 reserved bit = 9 bytes, RFC 9113 §4.1).**
-HTTP/2 *multiplexes* many streams over one connection, and that one fact explains its widths.
-- **24-bit length:** large bodies are split into many small DATA frames (default limit 16 KiB,
-  ceiling 16 MiB) so frames from different streams can interleave. One big frame would block
-  every other stream. Since frames are kept small, 24 bits is enough, and it saves a byte on
-  every frame.
-- **8-bit type and 8-bit flags:** this is the same reasoning as ours. HTTP/2 defines 10 types,
-  and receivers MUST ignore unknown types. Flags are booleans whose meaning depends on the type
-  (END_STREAM, END_HEADERS, PADDED, PRIORITY).
-- **31-bit stream ID:** stream IDs are **never reused** on a connection, and a long-lived
-  connection can open billions of streams, so the ID space must be large. Clients use odd IDs
-  and servers use even ones. The top bit is reserved; this came from SPDY, and it also keeps
-  the value within a signed 32-bit integer.
+**Why 32/8/8/16 bits?** Whole files occupy single frames: 32-bit lengths permit up to 4,294,967,295 payload bytes, including response metadata. Eight-bit types and flags leave extension space. Sixteen-bit IDs suffice for ordered exchanges with reuse. HTTP/2 uses 24/8/8/31 bits (plus a reserved bit): it splits bodies across frames and multiplexes streams whose IDs cannot be reused. This protocol needs neither multiplexing nor a 31-bit stream ID.
 
-We do not multiplex and our IDs can wrap, so we use the opposite trade-off: a larger length
-field and a smaller ID field.
+## 3. Payloads
 
-## 3. Frame types
+### 3.1 REQUEST (Type 0x01)
 
-| Type      | Name     | Sent by | Payload                    |
-|-----------|----------|---------|----------------------------|
-| 0x01      | REQUEST  | client  | §3.1                       |
-| 0x02      | RESPONSE | server  | §3.2                       |
-| 0x00, 0x03–0xFF | (unassigned) | — | Opaque; MUST be skipped (§5) |
+| Bytes | Field | Rule |
+| --- | --- | --- |
+| 1 | Method | 0x01 = GET; no other method defined |
+| 2 | Path length | N, the UTF-8 byte count |
+| N | Path | Nonempty; starts with /; see section 7 |
+| 1 | Header count | H, from 0 through 255 |
+| Variable | Headers | Exactly H entries using section 6 |
 
-The server acts only on REQUEST frames. The client acts only on RESPONSE frames. Each side
-handles every other type as unknown (§5).
+GET has no body. The payload MUST end immediately after its last header. A REQUEST payload MUST NOT exceed 65,536 bytes. No request headers are mandatory.
 
-### 3.1 REQUEST payload
+### 3.2 RESPONSE (Type 0x02)
 
-| Size     | Field        | Meaning                                                 |
-|---------:|--------------|---------------------------------------------------------|
-| 1        | Method       | 0x01 = GET. No other method is defined.                 |
-| 2        | Path length  | N = number of path bytes                                |
-| N        | Path         | UTF-8, MUST start with `/`, e.g. `/index.html`          |
-| 1        | Header count | H = number of header entries (0–255)                    |
-| variable | Headers      | H entries, each in the format of §6                     |
+The payload is Status (2 bytes), Header count (1 byte), that many headers (section 6), then the raw body bytes. The body occupies all remaining payload bytes, including zero bytes for an empty file. Body size is Length minus the status, count and encoded headers. No chunking or extra terminator is used.
 
-The payload MUST end exactly after the last header, because GET requests have no body.
+## 4. Flags and closing
 
-### 3.2 RESPONSE payload
+On REQUEST, CLOSE (0x01) asks the server to send one complete response with CLOSE set, then close. This also applies to error responses. On RESPONSE, CLOSE tells the client to stop sending and close; other outstanding requests fail. Senders MUST clear reserved flag bits; receivers MUST ignore them. Idle connections remain open until peer closure or server shutdown; there is no idle timeout.
 
-| Size       | Field        | Meaning                                                  |
-|-----------:|--------------|----------------------------------------------------------|
-| 2          | Status       | Numeric status code (§7)                                 |
-| 1          | Header count | H = number of header entries (0–255)                     |
-| variable   | Headers      | H entries, each in the format of §6                      |
-| the rest   | Body         | All remaining payload bytes (may be 0 bytes)             |
+## 5. Unknown frame types - required extension rule
 
-The body has no length field of its own: body length = frame `Length` minus the bytes consumed
-by Status, Header count and Headers. This avoids storing the same length twice.
+The server acts only on REQUEST; the client acts only on RESPONSE. For EVERY other type, the receiver MUST discard exactly Length bytes, send no reply, and continue at the next frame. Ignore its flags and ID, including CLOSE. Unknown frames are not subject to the REQUEST size limit and are discarded without allocating their entire payload. EOF while skipping is fatal. This rule lets a future version add types without losing frame boundaries.
 
-## 4. Flags
+<div style="page-break-before: always;"></div>
 
-| Bit (mask) | Name  | Meaning                                                              |
-|------------|-------|----------------------------------------------------------------------|
-| 0 (0x01)   | CLOSE | The sender will close the connection after this exchange.            |
-| 1–7        | —     | Reserved. Senders MUST set them to 0; receivers MUST ignore them.    |
+# BinHTTP/1 - Headers and server behaviour
 
-If a REQUEST has CLOSE set, the server sends its response with CLOSE set and then closes the
-connection. If a RESPONSE has CLOSE set, the client MUST NOT send more requests on that connection.
-It closes its own side, and reports any requests it had not yet sent as failed.
-*Rationale:* this replaces HTTP/1.1's `Connection: close` header with a single bit. Ignoring
-reserved bits lets future versions give them meanings without breaking old receivers.
+Revision 1.1 | Track 1: server | Page 2 of 2
 
-## 5. Extensibility rule: unknown frame types
+## 6. Header encoding
 
-If a receiver gets a frame whose Type it does not act on (§3), it MUST read exactly `Length`
-payload bytes, discard them, and carry on with the next frame header. It MUST NOT send a reply
-and MUST NOT close the connection. This works because the 8-byte header has the same layout
-for every type, so the receiver always knows where the next frame begins.
+Each entry is Name ID (1 byte), optionally Name length (1 byte) and Name, then Value length (2 bytes) and Value. With ID 0, the literal name MUST contain 1-255 lowercase ASCII token bytes: a-z, 0-9, and !#$%&'*+-.^_`|~. With IDs 1-10, omit the name length and name; use the table. Value length is 0-65535 UTF-8 bytes. Names MUST NOT repeat, including a literal spelling of an indexed name.
 
-## 6. Header encoding (simplified HPACK)
+| ID | Name | Typical sender/value |
+| --- | --- | --- |
+| 1 | host | Client: localhost:9000 |
+| 2 | user-agent | Client: spec-probe/1 |
+| 3 | accept | Client: */* |
+| 4 | server | Server: bserve/1.1 |
+| 5 | date | Server: current IMF-fixdate in GMT |
+| 6 | content-type | Server: text/plain, text/html, etc. |
+| 7 | content-length | Either: body byte count in decimal ASCII |
+| 8 | last-modified | Server: file mtime as IMF-fixdate |
+| 9 | etag | Server: W/"size-mtime", both hexadecimal |
+| 10 | cache-control | Server: max-age=60 |
 
-Each header entry looks like this:
+These ten names cover the three usual request headers and seven successful-response headers. Name IDs save repeated text; length-prefixed literals support other names. Unlike HPACK, there is no dynamic table or Huffman coding. IDs 11-255 are reserved: read Value length, skip exactly that many opaque bytes without decoding, and ignore the entry.
 
-| Size | Field         | Present when | Meaning                                         |
-|-----:|---------------|--------------|-------------------------------------------------|
-| 1    | Name ID       | always       | 0 = literal name follows; 1–10 = table below    |
-| 1    | Name length   | ID = 0       | K = number of name bytes (1–255)                |
-| K    | Name          | ID = 0       | Lowercase ASCII, e.g. `x-debug`                 |
-| 2    | Value length  | always       | V = number of value bytes (0–65535)             |
-| V    | Value         | always       | UTF-8 text                                      |
+When present, content-length MUST be nonempty ASCII digits and equal the actual body size; leading zeros are allowed. GET has no body, so its value may contain only zeros. This header never changes framing. Dates look like Thu, 08 Oct 2026 12:00:00 GMT. The size/mtime ETag is weak because it is not a content hash. Headers are descriptive; conditional requests and caching logic are not defined.
 
-**Static name table.** These are the 10 headers our implementations actually send:
+## 7. Paths, errors and limits
 
-| ID | Name           | Sent by | Example value                     |
-|---:|----------------|---------|-----------------------------------|
-| 1  | host           | client  | `localhost:9000`                  |
-| 2  | user-agent     | client  | `bcurl/1.0`                       |
-| 3  | accept         | client  | `*/*`                             |
-| 4  | server         | server  | `bserve/1.0`                      |
-| 5  | date           | server  | `Sun, 04 Oct 2026 19:40:00 GMT`   |
-| 6  | content-type   | server  | `text/html`                       |
-| 7  | content-length | server  | `1234` (decimal ASCII; equals body length) |
-| 8  | last-modified  | server  | `Sat, 03 Oct 2026 10:00:00 GMT`   |
-| 9  | etag           | server  | `"4d2-19a8f3c1e00"` (size-mtime in hex) |
-| 10 | cache-control  | server  | `max-age=60`                      |
+Paths are literal UTF-8 file paths using / separators. They MUST NOT contain NUL, backslash or colon, or start with //. No URL decoding, query parsing or fragment parsing occurs: %, ? and # are literal filename characters where the host filesystem permits them. Append index.html to paths ending in /. Strip the leading / and resolve beneath the canonical document root. Reject a lexically normalized escape with 403, then resolve symlinks and reject any existing target outside the canonical root with 403. Do not serve directories. Missing targets (including broken symlinks) return 404.
 
-IDs 11–255 are reserved. A receiver that sees one MUST still read the 2-byte Value length and
-skip the value, then ignore that entry. This lets the table grow later without breaking old
-receivers. Dates use the HTTP IMF-fixdate format. Header order does not matter, and each name
-SHOULD appear at most once. If `content-length` is present, it MUST equal the body length;
-a mismatch is a protocol error.
-*Rationale:* a common header costs 1 byte for its name instead of 5–15 bytes of text. Values
-stay as text so they are easy to read in a hexdump and work the same way as HTTP's.
-Real HPACK adds a dynamic table and Huffman coding, which we leave out to keep it simple.
+| Status | Meaning |
+| --- | --- |
+| 200 | Regular file found; body contains its exact bytes |
+| 400 | Malformed REQUEST, as defined below |
+| 403 | Path escapes the document root |
+| 404 | No regular file at the requested path |
+| 500 | Filesystem/read failure, or response cannot fit in a frame |
 
-## 7. Status codes and server behaviour
+A complete REQUEST is malformed if any field overruns its payload, bytes remain after the headers, Method is not 1, ID is 0, path violates its rules, literal name is empty/invalid, known header text is invalid UTF-8, a name repeats, or content-length is invalid. Reply 400 with the same ID (even 0) and continue, unless CLOSE was requested. Invalid known response fields, duplicate names or mismatched content-length are fatal to clients. Clients treat 200-399 as success and all other status codes as failure; error status alone does not terminate the connection.
 
-| Code | When                                                                          |
-|------|-------------------------------------------------------------------------------|
-| 200  | The file exists and its bytes are the body                                    |
-| 400  | Malformed REQUEST payload (list below)                                        |
-| 403  | The path resolves outside the document root (traversal attempt)              |
-| 404  | No regular file exists at the resolved path                                   |
-| 500  | Server-side failure, e.g. a read error or a file of 4 GiB or more              |
+An oversized REQUEST is exceptional: after its 8-byte header, reply 400 with CLOSE and close without reading its payload. EOF inside a header/payload closes the connection without a response. Filesystem errors before sending a response receive 500; an I/O failure after a response starts closes the connection, never inserts another frame into its body. Files must remain stable while served. Responses stream exactly the announced file size; file shrinkage causes a fatal truncated response. Errors carry a short text/plain body; server, date and content-length are included.
 
-**Malformed (400)** means any of the following: the payload ends before a field is complete;
-bytes remain after the last header; Method ≠ 0x01; Path is empty, does not start with `/`,
-contains a NUL byte or is not valid UTF-8; a literal Name length is 0; Request ID = 0.
-The frame header is still intact in all of these cases, so the server replies 400 with the same
-Request ID and **keeps the connection open**.
+## 8. Minimal request example
 
-**Oversized:** clients MUST NOT send a REQUEST payload larger than 65,536 bytes. If a REQUEST's
-`Length` is over 65,536 anyway, the server replies 400 with CLOSE set and closes the connection
-without reading the payload.
+`00 00 00 0e 01 00 00 01 01 00 0a 2f 68 65 6c 6c 6f 2e 74 78 74 00`
 
-**Malformed responses:** the client applies the same structural rules to RESPONSE payloads
-(the payload ends before a field is complete, or a literal Name length is 0). A violation is a
-protocol error, and the client closes the connection.
-
-**Status classes:** 2xx means success. Clients treat every code outside 200–399 as a failure.
-
-**Truncated:** if the connection reaches EOF in the middle of a frame, the receiver closes the
-connection without replying.
-
-**Path mapping.** If the path ends in `/`, append `index.html` to it. Strip the leading `/`
-and resolve the rest against the document root. Then canonicalize the result, resolving `.`,
-`..` and symlinks. If the canonical path is not inside the canonical root, reply 403.
-Non-200 responses SHOULD carry a short `text/plain` body that explains the error.
-
-## 8. Example: `GET /index.html`, Request ID 1
-
-```
-00 00 00 20  01  00  00 01       header: Length=32, Type=REQUEST, Flags=0, ID=1
-01                               Method = GET
-00 0B  2F 69 6E 64 65 78 2E 68 74 6D 6C        Path (11) = "/index.html"
-01                               Header count = 1
-01  00 0E  6C 6F 63 61 6C 68 6F 73 74 3A 39 30 30 30   host = "localhost:9000"
-```
+This is Length=14, Type=REQUEST, Flags=0, ID=1, Method=GET, Path length=10, Path=/hello.txt, Header count=0. Total: 8 + 14 = 22 bytes. The connection stays open. See HEXDUMP.md for an annotated captured exchange, including response headers and body.

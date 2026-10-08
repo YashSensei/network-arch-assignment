@@ -1,93 +1,96 @@
-# Annotated hexdump
+# Annotated BinHTTP exchange
 
-One complete exchange, captured with:
+Captured from this repository's Java server using `python tests/capture_exchange.py --write`.
+The probe compiles the server, starts it against `www` on an OS-selected port, and opens
+**one TCP connection**. Both captured frames have Flags=0, so the connection stays open.
+Timestamps, the selected port and the file's modification time vary between captures.
+Field definitions are in [SPEC.md](SPEC.md).
 
-    ./bserve ./www 9000
-    ./bcurl -v localhost:9000/hello.txt
+## Complete request (61 bytes)
 
-`>` lines are bytes the client sent and `<` lines are bytes it received. Offsets are in hex.
-Section numbers refer to [SPEC.md](SPEC.md).
-
-## Raw capture
-
-```
-> REQUEST frame: length=49 type=0x01 flags=0x01 id=1 (57 bytes total)
-> 00000000  00 00 00 31 01 01 00 01 01 00 0a 2f 68 65 6c 6c  ...1......./hell
-> 00000010  6f 2e 74 78 74 03 01 00 0e 6c 6f 63 61 6c 68 6f  o.txt....localho
-> 00000020  73 74 3a 39 30 30 30 02 00 09 62 63 75 72 6c 2f  st:9000...bcurl/
-> 00000030  31 2e 30 03 00 03 2a 2f 2a                       1.0...*/*
-< RESPONSE frame: length=142 type=0x02 flags=0x01 id=1 (150 bytes total)
-< 00000000  00 00 00 8e 02 01 00 01 00 c8 07 04 00 0a 62 73  ..............bs
-< 00000010  65 72 76 65 2f 31 2e 30 05 00 1d 53 75 6e 2c 20  erve/1.0...Sun, 
-< 00000020  30 34 20 4f 63 74 20 32 30 32 36 20 31 34 3a 32  04 Oct 2026 14:2
-< 00000030  37 3a 31 35 20 47 4d 54 06 00 0a 74 65 78 74 2f  7:15 GMT...text/
-< 00000040  70 6c 61 69 6e 07 00 02 31 33 08 00 1d 53 75 6e  plain...13...Sun
-< 00000050  2c 20 30 34 20 4f 63 74 20 32 30 32 36 20 31 34  , 04 Oct 2026 14
-< 00000060  3a 31 33 3a 33 37 20 47 4d 54 09 00 0f 22 64 2d  :13:37 GMT..."d-
-< 00000070  31 61 31 30 37 34 33 35 64 36 30 22 0a 00 0a 6d  1a107435d60"...m
-< 00000080  61 78 2d 61 67 65 3d 36 30 68 65 6c 6c 6f 2c 20  ax-age=60hello, 
-< 00000090  77 6f 72 6c 64 0a                                world.
+```text
+0000  00 00 00 35 01 00 00 01 01 00 0a 2f 68 65 6c 6c  |...5......./hell|
+0010  6f 2e 74 78 74 03 01 00 0f 6c 6f 63 61 6c 68 6f  |o.txt....localho|
+0020  73 74 3a 35 33 36 39 34 02 00 0c 73 70 65 63 2d  |st:53694...spec-|
+0030  70 72 6f 62 65 2f 31 03 00 03 2a 2f 2a           |probe/1...*/*|
 ```
 
-## Request (57 bytes = 8 header + 49 payload)
+| Offset (hex) | Bytes | Field | Decoded value |
+| --- | --- | --- | --- |
+| 0000-0003 | `00 00 00 35` | Payload length | 53 |
+| 0004 | `01` | Frame type | 1 (REQUEST) |
+| 0005 | `00` | Flags | 0: keep connection open |
+| 0006-0007 | `00 01` | Request ID | 1 |
+| 0008 | `01` | Method | 1 (GET) |
+| 0009-000a | `00 0a` | Path length | 10 |
+| 000b-0014 | `2f 68 65 6c 6c 6f 2e 74 78 74` | Path | /hello.txt |
+| 0015 | `03` | Header count | 3 |
+| 0016 | `01` | Name ID | 1: host |
+| 0017-0018 | `00 0f` | host value length | 15 |
+| 0019-0027 | `6c 6f 63 61 6c 68 6f 73 74 3a 35 33 36 39 34` | host value | `localhost:53694` |
+| 0028 | `02` | Name ID | 2: user-agent |
+| 0029-002a | `00 0c` | user-agent value length | 12 |
+| 002b-0036 | `73 70 65 63 2d 70 72 6f 62 65 2f 31` | user-agent value | `spec-probe/1` |
+| 0037 | `03` | Name ID | 3: accept |
+| 0038-0039 | `00 03` | accept value length | 3 |
+| 003a-003c | `2a 2f 2a` | accept value | `*/*` |
 
-| Offset | Bytes | Field | Value | Meaning |
-|---|---|---|---|---|
-| 00–03 | `00 00 00 31` | Length (§2) | 49 | 49 payload bytes follow the 8-byte header |
-| 04 | `01` | Type | 0x01 | REQUEST |
-| 05 | `01` | Flags | 0x01 | CLOSE: this is the client's only request, so it asks the server to close afterwards |
-| 06–07 | `00 01` | Request ID | 1 | The client's first request; the response must carry the same ID |
-| 08 | `01` | Method (§3.1) | 0x01 | GET |
-| 09–0A | `00 0a` | Path length | 10 | The next 10 bytes are the path |
-| 0B–14 | `2f 68 65 6c 6c 6f 2e 74 78 74` | Path | `/hello.txt` | File requested, UTF-8 |
-| 15 | `03` | Header count | 3 | Three header entries follow |
-| 16 | `01` | Name ID (§6) | 1 | Static table entry `host` |
-| 17–18 | `00 0e` | Value length | 14 | |
-| 19–26 | `6c 6f 63 61 6c 68 6f 73 74 3a 39 30 30 30` | Value | `localhost:9000` | Host and port as typed |
-| 27 | `02` | Name ID | 2 | `user-agent` |
-| 28–29 | `00 09` | Value length | 9 | |
-| 2A–32 | `62 63 75 72 6c 2f 31 2e 30` | Value | `bcurl/1.0` | Client name and version |
-| 33 | `03` | Name ID | 3 | `accept` |
-| 34–35 | `00 03` | Value length | 3 | |
-| 36–38 | `2a 2f 2a` | Value | `*/*` | Any content type is fine |
+## Complete response (153 bytes)
 
-The payload ends right after the last header, as §3.1 requires for GET (there is no body).
+```text
+0000  00 00 00 91 02 00 00 01 00 c8 07 04 00 0a 62 73  |..............bs|
+0010  65 72 76 65 2f 31 2e 31 05 00 1d 54 68 75 2c 20  |erve/1.1...Thu, |
+0020  30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 32  |08 Oct 2026 13:2|
+0030  30 3a 34 32 20 47 4d 54 06 00 0a 74 65 78 74 2f  |0:42 GMT...text/|
+0040  70 6c 61 69 6e 07 00 02 31 34 08 00 1d 54 68 75  |plain...14...Thu|
+0050  2c 20 30 38 20 4f 63 74 20 32 30 32 36 20 31 33  |, 08 Oct 2026 13|
+0060  3a 31 31 3a 33 39 20 47 4d 54 09 00 11 57 2f 22  |:11:39 GMT...W/"|
+0070  65 2d 31 61 31 31 62 61 34 31 32 37 65 22 0a 00  |e-1a11ba4127e"..|
+0080  0a 6d 61 78 2d 61 67 65 3d 36 30 68 65 6c 6c 6f  |.max-age=60hello|
+0090  2c 20 77 6f 72 6c 64 0d 0a                       |, world..|
+```
 
-## Response (150 bytes = 8 header + 142 payload)
+| Offset (hex) | Bytes | Field | Decoded value |
+| --- | --- | --- | --- |
+| 0000-0003 | `00 00 00 91` | Payload length | 145 |
+| 0004 | `02` | Frame type | 2 (RESPONSE) |
+| 0005 | `00` | Flags | 0: keep connection open |
+| 0006-0007 | `00 01` | Request ID | 1 |
+| 0008-0009 | `00 c8` | Status | 200 |
+| 000a | `07` | Header count | 7 |
+| 000b | `04` | Name ID | 4: server |
+| 000c-000d | `00 0a` | server value length | 10 |
+| 000e-0017 | `62 73 65 72 76 65 2f 31 2e 31` | server value | `bserve/1.1` |
+| 0018 | `05` | Name ID | 5: date |
+| 0019-001a | `00 1d` | date value length | 29 |
+| 001b-0037 | `54 68 75 2c 20 30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 32 30 3a 34 32 20 47 4d 54` | date value | `Thu, 08 Oct 2026 13:20:42 GMT` |
+| 0038 | `06` | Name ID | 6: content-type |
+| 0039-003a | `00 0a` | content-type value length | 10 |
+| 003b-0044 | `74 65 78 74 2f 70 6c 61 69 6e` | content-type value | `text/plain` |
+| 0045 | `07` | Name ID | 7: content-length |
+| 0046-0047 | `00 02` | content-length value length | 2 |
+| 0048-0049 | `31 34` | content-length value | `14` |
+| 004a | `08` | Name ID | 8: last-modified |
+| 004b-004c | `00 1d` | last-modified value length | 29 |
+| 004d-0069 | `54 68 75 2c 20 30 38 20 4f 63 74 20 32 30 32 36 20 31 33 3a 31 31 3a 33 39 20 47 4d 54` | last-modified value | `Thu, 08 Oct 2026 13:11:39 GMT` |
+| 006a | `09` | Name ID | 9: etag |
+| 006b-006c | `00 11` | etag value length | 17 |
+| 006d-007d | `57 2f 22 65 2d 31 61 31 31 62 61 34 31 32 37 65 22` | etag value | `W/"e-1a11ba4127e"` |
+| 007e | `0a` | Name ID | 10: cache-control |
+| 007f-0080 | `00 0a` | cache-control value length | 10 |
+| 0081-008a | `6d 61 78 2d 61 67 65 3d 36 30` | cache-control value | `max-age=60` |
+| 008b-0098 | `68 65 6c 6c 6f 2c 20 77 6f 72 6c 64 0d 0a` | Body | 'hello, world\r\n' |
 
-| Offset | Bytes | Field | Value | Meaning |
-|---|---|---|---|---|
-| 00–03 | `00 00 00 8e` | Length (§2) | 142 | 142 payload bytes follow |
-| 04 | `02` | Type | 0x02 | RESPONSE |
-| 05 | `01` | Flags | 0x01 | CLOSE echoed (§4): the server closes after this frame |
-| 06–07 | `00 01` | Request ID | 1 | Copied from the request, which pairs the two (§1) |
-| 08–09 | `00 c8` | Status (§3.2) | 200 | OK |
-| 0A | `07` | Header count | 7 | Seven header entries follow |
-| 0B | `04` | Name ID (§6) | 4 | `server` |
-| 0C–0D | `00 0a` | Value length | 10 | |
-| 0E–17 | `62 73 65 72 76 65 2f 31 2e 30` | Value | `bserve/1.0` | Server name and version |
-| 18 | `05` | Name ID | 5 | `date` |
-| 19–1A | `00 1d` | Value length | 29 | |
-| 1B–37 | `53 75 6e 2c 20 30 34 20 4f 63 74 20 32 30 32 36 20 31 34 3a 32 37 3a 31 35 20 47 4d 54` | Value | `Sun, 04 Oct 2026 14:27:15 GMT` | When the response was sent (IMF-fixdate) |
-| 38 | `06` | Name ID | 6 | `content-type` |
-| 39–3A | `00 0a` | Value length | 10 | |
-| 3B–44 | `74 65 78 74 2f 70 6c 61 69 6e` | Value | `text/plain` | Taken from the `.txt` extension |
-| 45 | `07` | Name ID | 7 | `content-length` |
-| 46–47 | `00 02` | Value length | 2 | |
-| 48–49 | `31 33` | Value | `13` | Body length as decimal text; must match the real body (§6) |
-| 4A | `08` | Name ID | 8 | `last-modified` |
-| 4B–4C | `00 1d` | Value length | 29 | |
-| 4D–69 | `53 75 6e 2c 20 30 34 20 4f 63 74 20 32 30 32 36 20 31 34 3a 31 33 3a 33 37 20 47 4d 54` | Value | `Sun, 04 Oct 2026 14:13:37 GMT` | The file's modification time |
-| 6A | `09` | Name ID | 9 | `etag` |
-| 6B–6C | `00 0f` | Value length | 15 | |
-| 6D–7B | `22 64 2d 31 61 31 30 37 34 33 35 64 36 30 22` | Value | `"d-1a107435d60"` | File size (0xd = 13) and mtime in ms, both in hex |
-| 7C | `0a` | Name ID | 10 | `cache-control` |
-| 7D–7E | `00 0a` | Value length | 10 | |
-| 7F–88 | `6d 61 78 2d 61 67 65 3d 36 30` | Value | `max-age=60` | The response may be cached for 60 s |
-| 89–95 | `68 65 6c 6c 6f 2c 20 77 6f 72 6c 64 0a` | Body | `hello, world\n` | The file's bytes: everything left in the payload (§3.2) |
+The response payload has **145 bytes**: 131 bytes of status,
+header count and encoded headers, followed by **14 body bytes**.
+This matches `content-length: 14`. The body is exactly `www/hello.txt`.
+Each of the ten header names in this exchange uses its one-byte static ID.
 
-**Body length check:** 142 payload bytes − 2 (status) − 1 (count) − 126 (headers) = 13 bytes,
-which matches `content-length: 13`.
+## Connection reuse verified
 
-**Header compression:** the 10 header names in this exchange take 10 bytes, one Name ID each.
-As text (`host`, `user-agent`, … `cache-control`) the same names would take 86 bytes.
+After this captured pair, the same socket sent a second GET with ID=2 and CLOSE=1.
+It received status 200, ID=2, CLOSE=1 and the same body, followed by EOF.
+**One TCP connection, two successful exchanges; closure only when requested.**
+
+The separate test suite also inserts unknown frames before valid requests and checks
+that they are skipped without a reply or loss of frame boundaries.

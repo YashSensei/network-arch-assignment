@@ -1,0 +1,6 @@
+* text=auto eol=lf
+bserve.cmd text eol=crlf
+bserve text eol=lf
+*.sh text eol=lf
+www/hello.txt text eol=lf
+*.pdf binary

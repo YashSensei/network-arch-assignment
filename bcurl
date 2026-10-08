@@ -1,5 +1,0 @@
-#!/bin/sh
-# Runs the BinHTTP client. Usage: ./bcurl [-v] host:port/path [host:port/path ...]
-# Runs BCurl.java in Java's single-file source mode, so there is no separate build step.
-DIR="$(cd "$(dirname "$0")" && pwd)"
-exec java "$DIR/client/BCurl.java" "$@"
